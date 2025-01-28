@@ -44,5 +44,5 @@ magic-pdf -p papers -o output -m auto
 ```
 10. Now you can use the chatbot from the commandline interface:
 ```
-python pipelines/neo4j_global.py -q "What are some algorithms for solving MINLP?"
+python pipelines/grapse.py -q "What are some algorithms for solving MINLP?"
 ```
