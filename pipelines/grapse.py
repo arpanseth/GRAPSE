@@ -29,7 +29,8 @@ import tiktoken
 warnings.filterwarnings("ignore")
 
 # Load the environment variables used for evaluation
-load_dotenv(dotenv_path='.env')
+dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+load_dotenv(dotenv_path=dotenv_path)
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 os.environ["NEO4J_URI"] = os.getenv("NEO4J_URI")
 os.environ["NEO4J_USERNAME"] = os.getenv("NEO4J_USERNAME")
@@ -66,7 +67,7 @@ class MainPipeline(Pipeline):
 
     def get_community_context(self, inputs):
         """
-        Existing code to retrieve summary contexts from __Community__ nodes
+        Retrieve summary contexts from __Community__ nodes
         based on vector search. 
         """
         question = inputs["question"]
@@ -95,15 +96,14 @@ class MainPipeline(Pipeline):
     
     def get_global_context(self, local_docs, question):
         """
-        A new method for 'global' retrieval that expands beyond the locally
+        A method for 'global' retrieval that expands beyond the locally
         retrieved docs. Here, we do a simple example of:
           - Extract doc IDs from the local retrieval
           - Match connected docs via edges in the graph
-          - Optionally compute embeddings to filter or re-rank
-        Adjust or replace this logic to suit how your graph is structured.
+          - TODO: Optionally compute embeddings to filter or re-rank
         """
 
-        # If your locally retrieved Documents include doc.metadata["id"],
+        # If locally retrieved Documents include doc.metadata["id"],
         # we can gather them here:
         local_doc_ids = []
         for doc in local_docs:
@@ -116,12 +116,11 @@ class MainPipeline(Pipeline):
 
         query_vector = OpenAIEmbeddings().embed_query(question)
 
-        # Example Cypher that:
+        # Cypher that:
         #  (1) UNWIND the local doc IDs
         #  (2) MATCH related docs via edges (e.g. :LINKS_TO or :MENTIONS)
-        #  (3) Optional: measure embedding similarity with question
+        #  (3) Measure embedding similarity with question
         #  (4) Return top-scoring expansions
-        # *** You must adapt the MATCH pattern & relationship to your graph ***
         cypher_query = """
             WITH $local_doc_ids AS localIds, $query_vector AS qv
             UNWIND localIds AS docId
@@ -138,14 +137,14 @@ class MainPipeline(Pipeline):
             "query_vector": query_vector
         })
 
-        # Create Document objects on the fly (or you can do something else).
+        # Create Document objects
         from langchain.schema import Document
         global_docs = []
         for r in records:
             global_docs.append(
                 Document(
                     page_content=r["text"],
-                    metadata={"score": r["score"]}   # store the similarity if needed
+                    metadata={"score": r["score"]} 
                 )
             )
 
@@ -156,7 +155,7 @@ class MainPipeline(Pipeline):
         self.graph = Neo4jGraph()
         self.llm = ChatOpenAI(temperature=0.0, model_name=self.model_name)
 
-        # Define your custom retrieval query
+        # custom retrieval query
         retrieval_query = """
             MATCH (n:Document)
             WITH n, vector.similarity.cosine(n.embedding, $embedding) AS score
@@ -211,8 +210,8 @@ class MainPipeline(Pipeline):
                 + community_context
             )
 
-            # --- Check token size! ---
-            max_tokens = 128_000  # your gpt-4o-mini limit
+            # Check token size
+            max_tokens = 128_000  
             # keep some buffer for the system prompt, question, and LLM answer
             safe_limit = max_tokens - 2000
 
