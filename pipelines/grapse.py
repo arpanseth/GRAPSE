@@ -129,7 +129,7 @@ class MainPipeline(Pipeline):
             WHERE g.embedding IS NOT NULL AND g.id <> docId
             WITH g, gds.similarity.cosine(g.embedding, qv) AS score
             ORDER BY score DESC
-            LIMIT 10
+            LIMIT 5
             RETURN g.text AS text, score
         """
 
@@ -188,7 +188,7 @@ class MainPipeline(Pipeline):
         # Create retrievers for both the document and community vector indexes
         self.vector_retreiver = self.vector_index.as_retriever(
             search_type="similarity_score_threshold", 
-            search_kwargs={'score_threshold': 0.3}
+            search_kwargs={'score_threshold': 0.5}
         )
 
         def combined_retriever_fn(inputs):
@@ -217,6 +217,7 @@ class MainPipeline(Pipeline):
             safe_limit = max_tokens - 2000
 
             current_tokens = num_tokens_from_string(combined_context, "gpt-4o-mini")
+            #print(f"Current tokens: {current_tokens}")
             if current_tokens > safe_limit:
                 print(f"WARNING: Truncating context to {safe_limit} tokens from {current_tokens} tokens")
                 # naive truncation approach
@@ -237,7 +238,7 @@ class MainPipeline(Pipeline):
         # Create a single prompt for the combined context
         combined_prompt = ChatPromptTemplate.from_messages([
             ("human", '''You are an assistant for question-answering tasks. 
-            Use the following pieces of retrieved context to answer the question.\n
+            Use the following pieces of retrieved context to answer the question. Keep the answer concise and to the point.\n
             Question: {question}\n
             Context: {context}\n
             Answer:'''),
