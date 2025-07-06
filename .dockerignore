@@ -1,0 +1,83 @@
+# Git and version control
+.git
+.gitignore
+*.md
+LICENSE
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Output and data directories (these will be mounted as volumes)
+output/
+papers/
+logs/
+state/
+
+# Test files and benchmarks
+tests/
+test_*.py
+*_test.py
+benchmarks/
+results/
+
+# Documentation
+docs/
+*.pdf
+*.docx
+*.pptx
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+.cache/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+
+# Docker files (except the ones we need)
+docker-compose.override.yml
+.dockerignore

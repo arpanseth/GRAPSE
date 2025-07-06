@@ -26,6 +26,8 @@ import warnings
 import re
 import base64
 from langchain.schema import Document
+from datetime import datetime
+import html
 
 warnings.filterwarnings("ignore")
 
@@ -131,7 +133,7 @@ class MainPipeline(Pipeline):
         full_text_query = " AND ".join([f"{word}~2" for word in words])
         return full_text_query.strip()
 
-    def semantic_document_retrieval(self, question: str, k: int = 5) -> List[CitationInfo]:
+    def semantic_document_retrieval(self, question: str, k: int = 10) -> List[CitationInfo]:
         """
         Perform semantic document retrieval with paper metadata for citations.
         """
@@ -230,7 +232,7 @@ class MainPipeline(Pipeline):
             print(f"Error in semantic document retrieval: {e}")
             return []
 
-    def entity_based_retrieval(self, question: str, k: int = 3) -> List[CitationInfo]:
+    def entity_based_retrieval(self, question: str, k: int = 5) -> List[CitationInfo]:
         """
         Perform entity-based retrieval with document traversal and paper metadata.
         """
@@ -241,7 +243,7 @@ class MainPipeline(Pipeline):
                 
             citations = []
             
-            for entity in entities[:3]:  # Limit to top 3 entities to avoid noise
+            for entity in entities[:k]:  # Limit to top 3 entities to avoid noise
                 query = self.generate_full_text_query(entity)
                 if not query:
                     continue
@@ -384,10 +386,13 @@ class MainPipeline(Pipeline):
         Encode image to base64 string.
         """
         try:
-            with open(image_path, "rb") as image_file:
+            # Fix the path if it contains the old GRAPSE folder name
+            corrected_path = image_path.replace("/Users/aseth/Projects/GRAPSE/", "/Users/aseth/Projects/GRAPSE_Dev/")
+            
+            with open(corrected_path, "rb") as image_file:
                 return base64.b64encode(image_file.read()).decode('utf-8')
         except Exception as e:
-            print(f"Error encoding image {image_path}: {e}")
+            print(f"Error encoding image {corrected_path}: {e}")
             return None
 
     def figure_retrieval(self, question: str, k: int = 3) -> List[FigureInfo]:
@@ -430,14 +435,20 @@ class MainPipeline(Pipeline):
                 
                 # Encode image to base64
                 image_base64 = ""
-                if result["image_path"] and os.path.exists(result["image_path"]):
-                    encoded = self.encode_image(result["image_path"])
-                    image_base64 = encoded if encoded else ""
+                if result["image_path"]:
+                    # Fix the path if it contains the old GRAPSE folder name
+                    corrected_path = result["image_path"].replace("/Users/aseth/Projects/GRAPSE/", "/Users/aseth/Projects/GRAPSE_Dev/")
+                    if os.path.exists(corrected_path):
+                        encoded = self.encode_image(result["image_path"])  # Pass original path, encode_image will fix it
+                        image_base64 = encoded if encoded else ""
+                
+                # Use corrected path for the FigureInfo object
+                corrected_image_path = result["image_path"].replace("/Users/aseth/Projects/GRAPSE/", "/Users/aseth/Projects/GRAPSE_Dev/") if result["image_path"] else ""
                 
                 figure = FigureInfo(
                     figure_id=result["figure_id"],
                     description=result["description"] or "No description available",
-                    image_path=result["image_path"] or "",
+                    image_path=corrected_image_path,
                     image_base64=image_base64,
                     paper_title=result["paper_title"] or "Unknown Title",
                     paper_authors=result["paper_authors"] or "Unknown Authors",
@@ -682,7 +693,7 @@ class MainPipeline(Pipeline):
 
     def setup(self):
         self.graph = Neo4jGraph()
-        self.llm = ChatOpenAI(temperature=0.0, model_name=self.model_name)
+        self.llm = ChatOpenAI(model_name=self.model_name)
 
         # Setup entity extraction chain
         entity_prompt = ChatPromptTemplate.from_messages([
@@ -737,8 +748,6 @@ class MainPipeline(Pipeline):
             4. Only reference figures/images that add value to your answer
             5. Be precise and academic, but focus on quality over quantity of citations
             6. If the question can be answered well with fewer sources, that's preferred
-            7. Synthesize information from different sources to create a comprehensive answer
-            8. Analyze the provided figures/images and incorporate insights from them in your answer
             
             Context: {context}
             
@@ -787,15 +796,257 @@ class MainPipeline(Pipeline):
         response = self.combined_rag_chain.invoke(input_data)
         return response, self.retrieved_docs
 
+    def format_answer_with_links(self, answer: str) -> str:
+        """
+        Convert citation references to clickable links in the answer.
+        """
+        # Pattern to match citation references like [Citation 1], [Citation 2,3], [1], [2,3]
+        def replace_citations(match):
+            citation_text = match.group(1)
+            citation_numbers = [num.strip() for num in citation_text.split(',')]
+            
+            links = []
+            for num in citation_numbers:
+                links.append(f'<a href="#citation-{num}" class="citation-link">[{num}]</a>')
+            
+            if len(links) == 1:
+                return links[0]
+            else:
+                return '[' + ', '.join([link[1:-1] for link in links]) + ']'
+        
+        # Replace citation patterns - handle both [Citation X] and [X] formats
+        citation_pattern = r'\[(?:Citation\s+)?([0-9,\s]+)\]'
+        formatted_answer = re.sub(citation_pattern, replace_citations, answer)
+        
+        # Convert newlines to HTML breaks for proper display
+        formatted_answer = formatted_answer.replace('\n', '<br>')
+        
+        return formatted_answer
+
+    def extract_referenced_figures(self, answer: str, figures: List[FigureInfo]) -> List[FigureInfo]:
+        """
+        Extract only the figures that are actually referenced in the answer text.
+        """
+        # Find all citation numbers mentioned in the answer
+        citation_pattern = r'\[(?:Citation\s+)?([0-9,\s]+)\]'
+        citation_matches = re.findall(citation_pattern, answer)
+        referenced_citation_numbers = set()
+        
+        for match in citation_matches:
+            # Split by comma and clean up whitespace
+            numbers = [int(num.strip()) for num in match.split(',') if num.strip().isdigit()]
+            referenced_citation_numbers.update(numbers)
+        
+        # Filter figures to only include those with citation numbers mentioned in the answer
+        referenced_figures = []
+        for figure in figures:
+            if figure.citation_number and figure.citation_number in referenced_citation_numbers:
+                referenced_figures.append(figure)
+        
+        return referenced_figures
+
+    def generate_html_report(self, question: str, answer: str, figures: List[FigureInfo], output_file: str = None):
+        """
+        Generate an HTML report with the question, answer, and embedded images.
+        """
+        if output_file is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = f"grapse_report_{timestamp}.html"
+        
+        # Extract only referenced figures
+        referenced_figures = self.extract_referenced_figures(answer, figures)
+        
+        # Calculate citation instances count outside f-string to avoid backslash issues
+        citation_instances_count = len(re.findall(r'\[[0-9,\s]+\]', answer))
+        
+        # Simple CSS styles - plain and minimal
+        css_styles = '''
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            line-height: 1.5;
+            color: #000;
+        }
+        
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+        
+        h2 {
+            font-size: 18px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+        
+        h3 {
+            font-size: 16px;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        
+        p {
+            margin-bottom: 15px;
+        }
+        
+        .stats {
+            margin-bottom: 30px;
+        }
+        
+        .stats p {
+            margin: 5px 0;
+        }
+        
+        .figure-image {
+            max-width: 100%;
+            height: auto;
+            margin: 15px 0;
+        }
+        
+        a {
+            color: blue;
+            text-decoration: underline;
+        }
+        
+        ol {
+            margin-left: 20px;
+        }
+        
+        li {
+            margin-bottom: 10px;
+        }
+        '''
+        
+        # Start building HTML content
+        html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GRAPSE Analysis Report</title>
+    <style>
+        {css_styles}
+    </style>
+</head>
+<body>
+    <h1>GRAPSE Analysis Report</h1>
+    <p><em>Graph-based Retrieval Agent for Process Systems Engineering</em></p>
+    
+    <h2>Question</h2>
+    <p>{html.escape(question)}</p>
+
+    <h2>Answer</h2>
+    ANSWER_PLACEHOLDER
+"""
+        
+        # Format the answer separately to avoid f-string conflicts
+        formatted_answer = self.format_answer_with_links(answer)
+        html_content = html_content.replace("ANSWER_PLACEHOLDER", formatted_answer)
+        
+        # Add figures section if we have referenced figures
+        if referenced_figures:
+            html_content += '''
+    <h2>Supporting Figures</h2>
+    <p>The following figures were referenced in the analysis above:</p>
+'''
+            
+            for i, figure in enumerate(referenced_figures, 1):
+                figure_html = f'''
+    <h3>Figure {i}: {html.escape(figure.figure_id)} [Citation {figure.citation_number}]</h3>
+    <p><em>{html.escape(figure.description)}</em></p>
+'''
+                
+                # Add image if available
+                if figure.image_base64:
+                    figure_html += f'''
+    <img src="data:image/jpeg;base64,{figure.image_base64}" 
+         alt="{html.escape(figure.figure_id)}" 
+         class="figure-image">
+'''
+                else:
+                    figure_html += f'''
+    <p><em>Image not available: {html.escape(figure.image_path)}</em></p>
+'''
+                
+                html_content += figure_html
+        
+        # Add bibliography from the existing method - only show used citations
+        bibliography = self.create_bibliography(answer)
+        if bibliography:
+            # Convert the bibliography to HTML format
+            bib_lines = bibliography.split('\n')
+            html_bibliography = '''
+    <h2>References</h2>
+    <ol>
+'''
+            
+            for line in bib_lines:
+                if line.strip() and line.startswith('[') and ']' in line:
+                    # Extract citation number and content
+                    citation_match = re.match(r'\[(\d+)\]\s*(.*)', line.strip())
+                    if citation_match:
+                        citation_num = citation_match.group(1)
+                        citation_content = citation_match.group(2)
+                        html_bibliography += f'        <li id="citation-{citation_num}">{html.escape(citation_content)}</li>\n'
+            
+            html_bibliography += '''
+    </ol>
+'''
+            html_content += html_bibliography
+        
+        # Close HTML
+        html_content += '''
+</body>
+</html>
+'''
+        
+        # Write to file
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        print(f"HTML report generated: {output_file}")
+        return output_file
+
+    def get_answer_with_html(self, question: str, output_file: str = None):
+        """
+        Get answer and generate HTML report in one go.
+        """
+        # Get the regular answer first
+        answer, retrieved_docs = self.get_answer(question)
+        
+        # Get figures from the retrieval process if available
+        figures = []
+        # We need to extract figures from the last retrieval
+        # For simplicity, we'll do a fresh figure retrieval
+        try:
+            figures = self.figure_retrieval(question, k=3)
+        except Exception as e:
+            print(f"Error retrieving figures for HTML: {e}")
+            figures = []
+        
+        # Generate HTML report
+        html_file = self.generate_html_report(question, answer, figures, output_file)
+        
+        return answer, retrieved_docs, html_file
+
 
 if __name__ == '__main__':
     # Parse arguments
     parser = ArgumentParser()
     parser.add_argument("-q", "--question", type=str, required=True, help="Question to ask the model")
     parser.add_argument("-m", "--model", type=str, required=False, default="gpt-4o-mini", help="Model to use for the answer")
+    parser.add_argument("-o", "--output", type=str, required=False, help="Output HTML file name")
     args = parser.parse_args()
     pipeline = MainPipeline(args.model)
     pipeline.retrieved_docs = None
     pipeline.setup()
-    answer, context = pipeline.get_answer(args.question)
-    print("Answer:\n", answer)
+    
+    if args.output:
+        # Generate HTML report
+        answer, context, html_file = pipeline.get_answer_with_html(args.question, args.output)
+        print("Answer:\n", answer)
+        print(f"\nHTML report generated: {html_file}")
+    else:
+        # Just get the answer
+        answer, context = pipeline.get_answer(args.question)
+        print("Answer:\n", answer)
